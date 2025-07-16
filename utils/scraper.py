@@ -11,14 +11,10 @@ from dotenv import load_dotenv
 load_dotenv()
 api_key = os.getenv("SCRAPPING_API_KEY")
 
-def fetch_linkedin_profile(linkedin_id: str) -> dict:
-    """
-    Fetches a LinkedIn profile using the ScrapingDog API and saves the result to a local JSON file.
-    Args:
-        linkedin_id (str): The LinkedIn profile identifier.
-    Returns:
-        dict: The profile data if successful, None otherwise.
-    """
+def fetch_profile(linkedin_id):
+    # Fetches LinkedIn profile data for a given LinkedIn ID using the ScrapingDog API.
+    # On successful response, saves the profile data to a local JSON file for caching and returns the data as a dictionary.
+    # Handles HTTP errors gracefully and returns None if the request fails.
     url = "https://api.scrapingdog.com/linkedin"
     params = {
         "api_key": api_key,
@@ -29,22 +25,16 @@ def fetch_linkedin_profile(linkedin_id: str) -> dict:
     response = requests.get(url, params=params)
     if response.status_code == 200:
         data = response.json()
-        with open("profile.json", "w") as f:
+        with open(f"profile.json", "w") as f:
             json.dump(data, f, indent=4)
         return data
     else:
         print(f"Request failed with status code: {response.status_code}")
         return None
 
-def fetch_linkedin_job_listings(field: str, exp_level: str = "associate") -> list:
-    """
-    Fetches job listings from LinkedIn for a given field and experience level using the ScrapingDog API.
-    Args:
-        field (str): The job field or keyword.
-        exp_level (str): The experience level (default: "associate").
-    Returns:
-        list: List of job listings as dictionaries.
-    """
+def fetch_job_listings(field,exp_level="associate"):
+    # Retrieves a list of job postings from the ScrapingDog API for a specified field and experience level.
+    # Returns the job listings as a JSON object if the request is successful, otherwise returns an empty list.
     url = "https://api.scrapingdog.com/linkedinjobs"
     params = {
         "api_key": api_key,
@@ -62,14 +52,9 @@ def fetch_linkedin_job_listings(field: str, exp_level: str = "associate") -> lis
         print(f"Request failed with status code: {response.status_code}")
         return []
 
-def fetch_linkedin_job_overview(job_id: str) -> dict:
-    """
-    Fetches a detailed overview for a specific LinkedIn job using the ScrapingDog API.
-    Args:
-        job_id (str): The LinkedIn job identifier.
-    Returns:
-        dict: The job overview data if successful, empty dict otherwise.
-    """
+def fetch_job_overview(job_id):
+    # Fetches detailed job overview information for a specific job ID using the ScrapingDog API.
+    # Returns the job overview as a dictionary if successful, otherwise returns an empty dictionary.
     url = "https://api.scrapingdog.com/linkedinjobs"
     params = {
         "api_key": api_key,
@@ -82,17 +67,11 @@ def fetch_linkedin_job_overview(job_id: str) -> dict:
         print(f"Request failed with status code: {response.status_code}")
         return {}
 
-def fetch_top_linkedin_job_overviews(field: str, exp_level: str, top_n: int = 5) -> list:
-    """
-    Fetches and aggregates overviews for the top N LinkedIn jobs in a given field and experience level.
-    Args:
-        field (str): The job field or keyword.
-        exp_level (str): The experience level.
-        top_n (int): Number of top jobs to fetch (default: 5).
-    Returns:
-        list: List of job overview dictionaries.
-    """
-    jobs = fetch_linkedin_job_listings(field, exp_level)
+def fetch_top_job_overviews(field, exp_level,top_n=5):
+    # Retrieves the top N job overviews for a given field and experience level.
+    # Aggregates job IDs from job listings and fetches their overviews, handling both list and dict response formats.
+    # Returns a list of dictionaries containing job_id, job_position, and job_description for each job.
+    jobs = fetch_job_listings(field,exp_level)
     if not jobs or not isinstance(jobs, list):
         print("No jobs found or invalid response format.")
         return []
@@ -100,7 +79,7 @@ def fetch_top_linkedin_job_overviews(field: str, exp_level: str, top_n: int = 5)
     job_ids = [job["job_id"] for job in jobs[:top_n] if isinstance(job, dict) and "job_id" in job]
     overviews = []
     for job_id in job_ids:
-        overview = fetch_linkedin_job_overview(job_id)
+        overview = fetch_job_overview(job_id)
         # overview can be a list or dict, handle both
         if isinstance(overview, list) and len(overview) > 0:
             overview = overview[0]
@@ -114,10 +93,8 @@ def fetch_top_linkedin_job_overviews(field: str, exp_level: str, top_n: int = 5)
             print(f"Failed to fetch overview or missing fields for job ID: {job_id}")
     return overviews
 
+# Output schema for job summary
 class JobSummary(BaseModel):
-    """
-    Enterprise-grade schema for summarizing a job description.
-    """
     position: str
     skills: List[str]
     responsibilities: List[str]
@@ -127,31 +104,19 @@ class JobSummary(BaseModel):
 
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-def extract_json_from_llm_response(response_text: str) -> str:
-    """
-    Extracts a JSON object from a string that may be wrapped in markdown code block.
-    Args:
-        response_text (str): The LLM response text.
-    Returns:
-        str: The extracted JSON string.
-    """
+def extract_json_from_response(response_text):
+    # Extracts a JSON object from a string, handling cases where the JSON may be wrapped in markdown code blocks.
+    # Returns the extracted JSON string or the original response text if no JSON object is found.
     match = re.search(r"\{.*\}", response_text, re.DOTALL)
     if match:
         return match.group(0)
     return response_text
 
-def evaluate_linkedin_job_descriptions(field: str, exp_level: str, top_n: int = 5) -> dict:
-    """
-    Fetches top job overviews, combines all job descriptions, and returns a single summarized evaluation object.
-    Deduplicates and merges overlapping skills, responsibilities, qualifications, industry practices, and highlights.
-    Args:
-        field (str): The job field or keyword.
-        exp_level (str): The experience level.
-        top_n (int): Number of top jobs to evaluate (default: 5).
-    Returns:
-        dict: Summarized job description data.
-    """
-    overviews = fetch_top_linkedin_job_overviews(field, exp_level, top_n)
+def evaluate_job_descriptions(field, exp_level,top_n=5):
+    # Aggregates and analyzes job descriptions for a given field and experience level.
+    # Fetches the top N job overviews, combines their descriptions, and uses an LLM to extract and deduplicate key job requirements.
+    # Returns a structured dictionary summarizing skills, responsibilities, qualifications, industry practices, and highlights.
+    overviews = fetch_top_job_overviews(field, exp_level,top_n)
     all_descriptions = [overview.get("job_description", "") for overview in overviews if overview.get("job_description")]
     combined_descriptions = "\n\n".join(all_descriptions)
 
@@ -171,7 +136,7 @@ def evaluate_linkedin_job_descriptions(field: str, exp_level: str, top_n: int = 
         \"\"\"
         """
     resp = llm([HumanMessage(content=prompt)])
-    json_str = extract_json_from_llm_response(resp.content)
+    json_str = extract_json_from_response(resp.content)
     try:
         data = json.loads(json_str)
         # Remove unwanted fields if present
@@ -180,6 +145,7 @@ def evaluate_linkedin_job_descriptions(field: str, exp_level: str, top_n: int = 
         # Deduplicate lists if LLM missed it
         for k, v in data.items():
             if isinstance(v, list):
+                # Lowercase and strip for better deduplication
                 seen = set()
                 deduped = []
                 for item in v:
@@ -192,6 +158,3 @@ def evaluate_linkedin_job_descriptions(field: str, exp_level: str, top_n: int = 
     except Exception as e:
         print(f"Error parsing evaluation response: {e}\nRaw response:\n{resp.content}")
         return {}
-
-# Aliases for compatibility with the rest of the codebase
-fetch_profile = fetch_linkedin_profile

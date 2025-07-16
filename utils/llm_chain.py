@@ -4,21 +4,18 @@ load_dotenv()
 from langchain_openai import OpenAI
 from langchain.prompts import PromptTemplate
 from langgraph.graph import StateGraph
+
+from langgraph.graph import StateGraph
 from langgraph.checkpoint.sqlite import SqliteSaver
 import sqlite3
 from typing import TypedDict, List
 import streamlit as st
 
-# Shared LLM instance for all operations
+# Shared LLM
 llm = OpenAI(temperature=0.1, model="gpt-4o-mini")
 
-# --- Data Schemas ---
-
-class JobDescriptionSchema(TypedDict):
-    """
-    Enterprise-grade schema for representing a job description.
-    Includes position, required skills, responsibilities, qualifications, industry practices, and highlights.
-    """
+# 1. Define job description schema
+class JobDesc(TypedDict):
     position: str
     skills: List[str]
     responsibilities: List[str]
@@ -26,25 +23,22 @@ class JobDescriptionSchema(TypedDict):
     industry_practices: List[str]
     highlights: List[str]
 
-class LinkedInProfileState(TypedDict):
-    """
-    State schema for the LinkedIn optimization workflow.
-    Tracks the profile, job description, and all intermediate/final outputs.
-    """
+# 2. Define state schema for the graph
+class LinkedInState(TypedDict):
     profile: dict
-    job_desc: JobDescriptionSchema
+    job_desc: JobDesc
     analysis: str
     fit: str
     rewrite: str
     counseling: str
 
-# --- LLM Agent Functions ---
-
-def analyze_linkedin_profile(state: LinkedInProfileState) -> dict:
+# Agent functions now accept and return updates, no side-effects
+def analyze_profile(state: LinkedInState) -> dict:
     """
-    Performs a comprehensive analysis of the LinkedIn profile.
-    Identifies gaps, inconsistencies, and areas for improvement, focusing on alignment with professional standards and keyword optimization.
-    Returns a structured analysis for downstream processing.
+    Performs a comprehensive analysis of the user's LinkedIn profile.
+    Identifies gaps, inconsistencies, and areas for improvement across all major sections.
+    Provides actionable, structured suggestions to enhance professional presentation and keyword optimization.
+    Returns a dictionary containing the analysis results.
     """
     prompt = PromptTemplate(
         input_variables=["profile"],
@@ -75,11 +69,11 @@ def analyze_linkedin_profile(state: LinkedInProfileState) -> dict:
     result = llm.invoke(prompt.format(profile=state["profile"]))
     return {"analysis": result}
 
-def perform_job_fit_analysis(state: LinkedInProfileState) -> dict:
+def job_fit_analysis(state: LinkedInState) -> dict:
     """
-    Compares the LinkedIn profile to the target job description.
-    Generates a fit score, identifies missing qualifications/skills, and provides actionable improvement suggestions.
-    Ensures the profile is aligned with the requirements of the target role.
+    Compares the user's LinkedIn profile against the target job description.
+    Generates a quantitative match score, highlights missing qualifications or skills, and recommends improvements for better alignment.
+    Returns a dictionary with the fit analysis.
     """
     prompt = PromptTemplate(
         input_variables=["profile", "job_desc"],
@@ -88,7 +82,7 @@ def perform_job_fit_analysis(state: LinkedInProfileState) -> dict:
         Your task is to meticulously compare the provided LinkedIn profile data against the target job description.
 
         Perform the following analysis:
-        1.  **Generate a Match Score (50-100):** Provide a quantitative assessment of how well the profile aligns with the job requirements.
+        1.  **Generate a Match Score (70-100):** Provide a quantitative assessment of how well the profile aligns with the job requirements.
         2.  **Identify Missing Qualifications/Skills:** Detail specific skills, experiences, or qualifications present in the job description but absent or insufficiently highlighted in the profile.
         3.  **Suggest Improvements for Better Alignment:** Offer concrete, actionable advice on how the profile could be enhanced to better match the job description. This includes:
             - Recommending specific keywords from the job description to integrate.
@@ -113,11 +107,11 @@ def perform_job_fit_analysis(state: LinkedInProfileState) -> dict:
     result = llm.invoke(prompt.format(profile=state["profile"], job_desc=state["job_desc"]))
     return {"fit": result}
 
-def rewrite_linkedin_profile_sections(state: LinkedInProfileState) -> dict:
+def rewrite_sections(state: LinkedInState) -> dict:
     """
-    Rewrites key LinkedIn profile sections (About, Experience, Skills, Headline) for maximum impact.
-    Ensures content is concise, compelling, and aligned with both industry best practices and the target job description.
-    Incorporates strategic keywords, quantifiable achievements, and a strong narrative.
+    Rewrites key sections of the LinkedIn profile (About, Experience, Skills, Headline) for clarity, impact, and alignment with industry standards and the target job description.
+    Ensures integration of relevant keywords, quantifiable achievements, and compelling narrative.
+    Returns a dictionary with the rewritten sections.
     """
     prompt = PromptTemplate(
         input_variables=["profile", "job_desc"],
@@ -154,11 +148,11 @@ def rewrite_linkedin_profile_sections(state: LinkedInProfileState) -> dict:
     result = llm.invoke(prompt.format(profile=state["profile"], job_desc=state["job_desc"]))
     return {"rewrite": result}
 
-def provide_career_counseling(state: LinkedInProfileState) -> dict:
+def career_counseling(state: LinkedInState) -> dict:
     """
-    Provides comprehensive, actionable career counseling based on the LinkedIn profile and job description.
-    Identifies skill gaps, recommends learning resources, and advises on career paths and personal branding.
-    Leverages previous analysis, fit assessment, and rewritten sections for holistic guidance.
+    Delivers strategic career counseling based on the user's LinkedIn profile and the target job description.
+    Identifies skill gaps, recommends learning resources, suggests career paths, and provides actionable advice for professional growth and personal branding.
+    Returns a dictionary with the counseling output.
     """
     prompt = PromptTemplate(
         input_variables=["profile", "job_desc", "analysis", "fit", "rewrite"],
@@ -201,32 +195,25 @@ def provide_career_counseling(state: LinkedInProfileState) -> dict:
         Comprehensive Career Counseling:
         """
     )
-    result = llm.invoke(prompt.format(
-        profile=state["profile"],
-        job_desc=state["job_desc"],
-        analysis=state["analysis"],
-        fit=state["fit"],
-        rewrite=state["rewrite"]
-    ))
+    result = llm.invoke(prompt.format(profile=state["profile"], job_desc=state["job_desc"],analysis=state["analysis"], fit=state["fit"], rewrite=state["rewrite"]))
     return {"counseling": result}
 
-# --- StateGraph Construction ---
+# 3. Build the StateGraph
 
 @st.cache_resource
 def get_langgraph_app():
     """
-    Constructs and compiles the LinkedIn optimization workflow as a StateGraph.
-    Each node represents a distinct processing stage (analysis, fit, rewrite, counseling).
-    Uses SQLite for persistent checkpointing, enabling robust state management and recovery.
-    Returns a compiled graph ready for invocation.
+    Constructs and compiles the LinkedIn optimization workflow as a stateful graph.
+    Initializes persistent storage for checkpoints, defines the sequence of analysis nodes, and sets entry and exit points.
+    Returns the compiled graph application for use in the Streamlit interface.
     """
     conn = sqlite3.connect("linkedin_memory.db", check_same_thread=False)
     saver = SqliteSaver(conn)
-    graph = StateGraph(LinkedInProfileState)
-    graph.add_node("analysis", analyze_linkedin_profile)
-    graph.add_node("fit", perform_job_fit_analysis)
-    graph.add_node("rewrite", rewrite_linkedin_profile_sections)
-    graph.add_node("counseling", provide_career_counseling)
+    graph = StateGraph(LinkedInState)
+    graph.add_node("analysis", analyze_profile)
+    graph.add_node("fit", job_fit_analysis)
+    graph.add_node("rewrite", rewrite_sections)
+    graph.add_node("counseling", career_counseling)
     graph.set_entry_point("analysis")
     graph.set_finish_point("counseling")
     graph.add_edge("analysis", "fit")
